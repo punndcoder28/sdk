@@ -1,0 +1,47 @@
+# Git hooks for ai-sdk-python — runs for every developer after `scripts/install-hooks.sh`
+# (or `uv run pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push`).
+#
+# This is the Python-ecosystem equivalent of Husky: hooks live in the repo config and
+# are installed into `.git/hooks` on each machine. They do NOT require Grok/any agent.
+#
+# Docs: https://pre-commit.com/
+
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  # --- Formatting & lint (pre-commit stage) ---
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+        types_or: [python, pyi]
+      - id: ruff-format
+        types_or: [python, pyi]
+
+  - repo: local
+    hooks:
+      - id: no-conflict-markers
+        name: block unresolved merge conflict markers
+        entry: bash scripts/hooks/check_conflict_markers.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # --- Commit message (commit-msg stage) ---
+      - id: conventional-commit-msg
+        name: conventional commit message + required body
+        entry: bash scripts/hooks/check_commit_msg.sh
+        language: system
+        pass_filenames: true
+        stages: [commit-msg]
+
+      # --- Pre-push: mergeability vs parent/base branch ---
+      - id: merge-check-parent
+        name: check merge conflicts vs parent/base branch
+        entry: bash scripts/hooks/check_merge_parent.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+        always_run: true

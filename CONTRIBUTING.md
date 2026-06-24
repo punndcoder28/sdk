@@ -38,11 +38,15 @@ Thank you for your interest in contributing to AI SDK Python! This document prov
    uv sync --dev
    ```
 
-3. **Install pre-commit hooks**
+3. **Install git hooks** (required — these run on every commit/push, with or without an AI agent)
 
    ```bash
-   uv run pre-commit install
+   ./scripts/install-hooks.sh
+   # equivalent:
+   # uv run pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push
    ```
+
+   Hooks are configured in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) (same role as Husky in JS repos: real `.git/hooks`, not agent-only checks).
 
 4. **Run tests to verify setup**
    ```bash
@@ -145,17 +149,51 @@ We use [Ty](https://github.com/astral-sh/ty) for type checking:
 uv run ty check src/
 ```
 
-### Pre-commit Hooks
+### Git hooks (pre-commit / commit-msg / pre-push)
 
-We use pre-commit hooks to ensure code quality:
+Hooks are installed **per clone** into `.git/hooks` via the [pre-commit](https://pre-commit.com/) framework (Python’s equivalent of [Husky](https://typicode.github.io/husky/) for Node). Once installed, they run for **every** `git commit` / `git push` on that machine — no Grok or other agent required.
+
+| Hook | When | What it enforces |
+|------|------|------------------|
+| **pre-commit** | `git commit` | Ruff lint + format on staged Python; blocks unresolved `<<<<<<<` conflict markers |
+| **commit-msg** | `git commit` | [Conventional Commits](https://www.conventionalcommits.org/) subject (`feat(scope): …`) **and** a non-empty body after a blank line |
+| **pre-push** | `git push` | No merge conflicts vs the parent/base branch (`main` by default; see stacked PRs below) |
 
 ```bash
-# Install pre-commit hooks
-uv run pre-commit install
+# One-time per clone (after uv sync --extra dev)
+./scripts/install-hooks.sh
 
-# Run all hooks manually
+# Run pre-commit hooks on all files manually
 uv run pre-commit run --all-files
+
+# Test commit message rules only
+echo -e "feat(test): example subject\n\nExample body line." > /tmp/msg.txt
+bash scripts/hooks/check_commit_msg.sh /tmp/msg.txt
+
+# Test merge check only
+bash scripts/hooks/check_merge_parent.sh
 ```
+
+**Example valid commit:**
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat(providers): add native anthropic client
+
+Talk to the Messages API directly instead of the OpenAI compatibility layer
+so tool_use and system prompts use Anthropic-native shapes.
+EOF
+)"
+```
+
+**Stacked PRs:** `pre-push` compares your branch to `main` (or `origin/HEAD`) by default. When pushing a mid-stack branch whose PR base is another feature branch, set the parent explicitly:
+
+```bash
+export GITHOOK_PARENT_BRANCH=feat/my-feature-01-schema
+git push -u origin HEAD
+```
+
+Scripts live under [`scripts/hooks/`](scripts/hooks/); installer: [`scripts/install-hooks.sh`](scripts/install-hooks.sh).
 
 ## Testing
 
