@@ -24,7 +24,11 @@ that implements the tool logic::
     class DoubleParams(BaseModel):
         x: int
 
-    @tool(name="double", description="Double the given integer.", parameters=DoubleParams)
+    @tool(
+        name="double",
+        description="Double the given integer.",
+        parameters=DoubleParams,
+    )
     def double(x: int) -> int:
         return x * 2
 
@@ -35,16 +39,17 @@ argument to enable iterative tool calling.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, Union, Type
 import inspect
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 from pydantic import BaseModel
 
-HandlerFn = Callable[..., Union[Any, Awaitable[Any]]]
+HandlerFn = Callable[..., Any | Awaitable[Any]]
 
 
-def _pydantic_to_json_schema(model: Type[BaseModel]) -> Dict[str, Any]:
+def _pydantic_to_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     """Convert a Pydantic model to JSON schema format."""
     schema = model.model_json_schema()
 
@@ -54,6 +59,11 @@ def _pydantic_to_json_schema(model: Type[BaseModel]) -> Dict[str, Any]:
     if "required" not in schema:
         schema["required"] = []
 
+    # Gemini FunctionDeclaration rejects some JSON Schema metadata keys.
+    schema.pop("title", None)
+    schema.pop("$defs", None)
+    schema.pop("definitions", None)
+
     return schema
 
 
@@ -61,16 +71,21 @@ def _pydantic_to_json_schema(model: Type[BaseModel]) -> Dict[str, Any]:
 class Tool:  # noqa: D101 – simple value object
     name: str
     description: str
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     handler: HandlerFn = field(repr=False)
-    _pydantic_model: Type[BaseModel] | None = field(default=None, repr=False)
+    _pydantic_model: type[BaseModel] | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
     # Helper utilities used by provider adapters
     # ------------------------------------------------------------------
 
-    def to_openai_dict(self) -> Dict[str, Any]:
-        """Return the OpenAI Chat Completions *tools* representation."""
+    def to_openai_dict(self) -> dict[str, Any]:
+        """Return the OpenAI Chat Completions *tools* representation.
+
+        OpenAI expects tools as ``{"type": "function", "function": {...}}``
+        objects that are passed via the ``tools`` parameter of the chat
+        completions endpoint.
+        """
         return {
             "type": "function",
             "function": {
@@ -78,6 +93,35 @@ class Tool:  # noqa: D101 – simple value object
                 "description": self.description,
                 "parameters": self.parameters,
             },
+        }
+
+    def to_anthropic_dict(self) -> dict[str, Any]:
+        """Return the Anthropic Messages API *tools* representation.
+
+        Anthropic expects a flat tool definition with ``name``,
+        ``description``, and ``input_schema`` (JSON Schema object) fields.
+        """
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.parameters,
+        }
+
+    def to_gemini_dict(self) -> dict[str, Any]:
+        """Return a Gemini / Google GenAI *function declaration* dict.
+
+        Gemini uses function declarations inside a ``Tool`` object.  The returned
+        dict intentionally mirrors the *inner* OpenAI function object
+        (``name`` / ``description`` / ``parameters``) — not the full
+        ``{"type": "function", "function": {...}}`` wrapper from
+        :meth:`to_openai_dict`.  Callers must not pass this value to OpenAI
+        ``tools`` without re-wrapping.
+        """
+        # Same three keys as OpenAI's function sub-object by design (see above).
+        return {
+            "name": self.name,
+            "description": self.description,
+            "parameters": self.parameters,
         }
 
     async def run(self, **kwargs: Any) -> Any:  # noqa: D401 – mirrors JS SDK
@@ -102,9 +146,9 @@ def tool(
     *,
     name: str,
     description: str,
-    parameters: Dict[str, Any] | Type[BaseModel],
+    parameters: dict[str, Any] | type[BaseModel],
     execute: HandlerFn | None = None,
-) -> "Tool" | Callable[[HandlerFn], "Tool"]:  # noqa: D401
+) -> Tool | Callable[[HandlerFn], Tool]:  # noqa: D401
     """Create a :class:`ai_sdk.tool.Tool` from a Python callable.
 
     Parameters
